@@ -46,6 +46,7 @@ class KinematicObservation(ObservationType):
             env: gym.Env,
             features: List[str] = None,
             vehicles_count: int = 5,
+            absolute: bool = False,
             order: str = "sorted",
             **kwargs: Dict
     ) -> None:
@@ -53,12 +54,14 @@ class KinematicObservation(ObservationType):
         :param env: The environment to observe
         :param features: Names of features used in the observation
         :param vehicles_count: Number of observed vehicles
+        :param absolute: If False, the observed vehicles are relative to the observer vehicle
         :param order: Order of observed vehicles. Values: sorted, shuffled
         """
 
         super().__init__(env)
         self.features = features or self.FEATURES
         self.vehicles_count = vehicles_count
+        self.absolute = absolute
         self.order = order
 
     def space(self) -> spaces.Box:
@@ -69,7 +72,7 @@ class KinematicObservation(ObservationType):
             dtype=np.float32
         )
     
-    def vehicle_to_dict(self, vehicle: carla.Vehicle) -> dict:
+    def vehicle_to_dict(self, vehicle: carla.Vehicle, origin_vehicle: carla.Vehicle = None) -> dict:
         """Attempts to get the transform of a vehicle, returning None if the vehicle is destroyed."""
 
         transform = vehicle.get_transform()
@@ -91,6 +94,12 @@ class KinematicObservation(ObservationType):
             "vz": round(velocity.z, 3),
             "speed": round(get_speed(vehicle), 3),
         }
+
+        if origin_vehicle:
+            origin_dict = self.vehicle_to_dict(origin_vehicle)
+            for key in ["x", "y", "z", "vx", "vy", "vz", "speed"]:
+                d[key] -= origin_dict[key]
+
         return d
     
     def calculate_distance(self, loc1: carla.Location, loc2: carla.Location) -> float:
@@ -107,9 +116,10 @@ class KinematicObservation(ObservationType):
         
         dp = pd.DataFrame.from_records([self.vehicle_to_dict(self.observer_vehicle)])
 
+        origin = self.observer_vehicle if not self.absolute else None
         vehicles_df = pd.DataFrame.from_records(
             [
-                self.vehicle_to_dict(v)
+                self.vehicle_to_dict(v, origin)
                 for v in self.sort_vehicles_by_distance(self.observer_vehicle, self.env.vehicles)
             ]
         )

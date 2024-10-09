@@ -31,8 +31,10 @@ class Town04Env(CarlaEnv):
                 },
                 "observation": {
                     "type": "KinematicObservation",
-                    "features": ["x", "y", "vx", "vy"],
+                    "features": ["x", "y", "vx", "vy", "speed"],
                     "vehicles_count": 5,
+                    "absolute": False,
+                    "order": "sorted"
                 },
                 "duration": 5000,
                 "collision_reward": -200,
