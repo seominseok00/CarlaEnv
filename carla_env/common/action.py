@@ -6,7 +6,7 @@ import gym
 from gym import spaces
 
 import carla
-from agents.navigation.controller import VehiclePIDController, PIDLongitudinalController, PIDLateralController
+from agents.navigation.controller import PIDLateralController
 
 from carla_env.common.utils import lmap
 
@@ -157,6 +157,10 @@ class DiscreteMetaAction(ActionType):
     ACTIONS_LAT = {0: "LANE_LEFT", 1: "IDLE", 2: "LANE_RIGHT"}
     """A mapping of lateral action indexes to labels."""
 
+    THROTTLE_RANGE = np.arange(0, 1.1, 0.1)
+
+    BRAKE_RANGE = np.arange(0, 1.1, 0.1)
+
     def __init__(
             self, 
             env: gym.Env,
@@ -195,7 +199,8 @@ class DiscreteMetaAction(ActionType):
         if self.actions is None:
             raise ValueError("At least longitudinal or lateral actions must be included")
         
-        self.target_speed = 0
+        self.throttle_idx = 0
+        self.brake_idx = 0
         self.waypoint_idx = 0
         self.is_arrived = False
 
@@ -203,26 +208,12 @@ class DiscreteMetaAction(ActionType):
         return spaces.Discrete(len(self.actions))
 
         
-    def setup_PID(self) -> PIDLongitudinalController:
+    def setup_PID(self) -> PIDLateralController:
         """
         Currently, the action is only supported for the longitudinal control.
         """
 
-        args_lateral_dict = {
-            'K_P': 1.95,
-            'K_D': 0.2,
-            'K_I': 0.07
-            ,'dt': 1.0 / 10.0
-        }
-
-        args_long_dict = {
-            'K_P': 1,
-            'K_D': 0.0,
-            'K_I': 0.75
-            ,'dt': 1.0 / 10.0
-        }
-
-        self.controller = VehiclePIDController(self.controlled_vehicle, args_lateral=args_lateral_dict,args_longitudinal=args_long_dict)
+        self.controller = PIDLateralController(self.controlled_vehicle, K_P=1.95, K_I=0.07, K_D=0.2, dt=1.0 / 10.0)
 
     @property
     def controlled_vehicle(self):
@@ -254,14 +245,17 @@ class DiscreteMetaAction(ActionType):
         Currently, the action is only supported for the longitudinal control.
         """
 
+        # For debugging
         self.env.world.debug.draw_point(self.waypoints[self.waypoint_idx].transform.location, size=0.1, color=carla.Color(0, 0, 255), life_time=0.1)
 
         action = self.actions[int(action)]
         
         if action == "FASTER":
-            self.target_speed = min(80, self.target_speed + 1)
+            self.throttle_idx = min(len(self.THROTTLE_RANGE) - 1, self.throttle_idx + 1)
+            self.brake_idx = 0
         elif action == "SLOWER":
-            self.target_speed = max(0, self.target_speed - 1)
+            self.brake_idx = min(len(self.BRAKE_RANGE) - 1, self.brake_idx + 1)
+            self.throttle_idx = 0
         elif action == "IDLE":
             pass
 
@@ -269,7 +263,10 @@ class DiscreteMetaAction(ActionType):
             self.controlled_vehicle.apply_control(carla.VehicleControl(brake=1.0, steer=0.0))
         else:
             distance = self.calculate_distance(self.controlled_vehicle.get_location(), self.waypoints[self.waypoint_idx].transform.location)
-            control = self.controller.run_step(self.target_speed, self.waypoints[self.waypoint_idx])
+            throttle = self.THROTTLE_RANGE[self.throttle_idx]
+            steer = self.controller.run_step(self.waypoints[self.waypoint_idx])
+            brake = self.BRAKE_RANGE[self.brake_idx]
+            control = carla.VehicleControl(throttle=throttle, steer=steer, brake=brake)
             self.controlled_vehicle.apply_control(control)
 
             if distance < 3.5:
