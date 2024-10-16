@@ -49,12 +49,11 @@ class ContinuousAction(ActionType):
     An continuous action space for throttle and steering angle.
 
     If both throttle and streeing are enabled, they are set in this order: [throttle, steering]
-
-    The space intervals are always [-1, 1], but are mapped to throttle/steering intervals through configurations.
     """
 
     THROTTLE_RANGE = [0.0, 1.0]
     STEER_RANGE = [-1.0, 1.0]
+    BRAKE_RANGE = [0.0, 1.0]
 
     def __init__(
             self,
@@ -85,7 +84,7 @@ class ContinuousAction(ActionType):
         if not self.longitudinal and not self.lateral:
             raise ValueError("Either longitudinal and/or lateral control must be enabled")
         
-        self.size = 2 if self.longitudinal and self.lateral else 1
+        self.size = 3 if self.longitudinal and self.lateral else 2 if self.longitudinal else 1
         self.last_action = np.zeros(self.size)
 
         self.target_speed = 0
@@ -100,31 +99,15 @@ class ContinuousAction(ActionType):
             return {
                 "throttle": lmap(action[0], [-1, 1], self.throttle_range),
                 "steer": lmap(action[1], [-1, 1], self.steer_range),
+                "brake": lmap(action[2], [-1, 1], self.BRAKE_RANGE)
             }
         
         elif self.longitudinal:
-            return {"throttle": lmap(action[0], [-1, 1], self.throttle_range)}
+            return {"throttle": lmap(action[0], [-1, 1], self.throttle_range),
+                    "brake": lmap(action[1], [-1, 1], self.BRAKE_RANGE)}
         
         elif self.lateral:
             return {"steer": lmap(action[0], [-1, 1], self.steer_range)}
-    
-    def setup_PID(self) -> PIDLongitudinalController:
-        """
-        Setup the PID controller for the vehicle.
-        If longitudinal and lateral control are enabled, do not use any controller.
-        If only longitudinal is enabled, lateral control is automatically executed.
-        If only lateral is enabled, longitudinal control is automatically executed.
-        """
-
-        if self.longitudinal and self.lateral:
-            pass
-
-        elif self.longitudinal:
-            self.controller = PIDLateralController(self.controlled_vehicle, K_P=1.95, K_I=0.2, K_D=0.07, dt=1.0 / 10.0)
-
-        elif self.lateral:
-            self.controller = PIDLongitudinalController(self.controlled_vehicle, K_P=1.0, K_I=0.0, K_D=0.75, dt=1.0 / 10.0)
-            
 
     @property
     def controlled_vehicle(self):
@@ -138,18 +121,6 @@ class ContinuousAction(ActionType):
     @controlled_vehicle.setter
     def controlled_vehicle(self, vehicle):
         self._controlled_vehicle = vehicle
-        self.setup_PID()
-
-    @property
-    def waypoints(self):
-        return self._waypoints
-    
-    @waypoints.setter
-    def waypoints(self, waypoints):
-        self._waypoints = waypoints
-
-    def calculate_distance(self, loc1: carla.Location, loc2: carla.Location) -> float:
-        return loc1.distance(loc2)
     
     def act(self, action: np.ndarray) -> None:
         """
@@ -160,28 +131,17 @@ class ContinuousAction(ActionType):
         
         if self.longitudinal and self.lateral:
             action_dict = self.get_action(action)
-            self.controlled_vehicle.apply_control(carla.VehicleControl(throttle=action_dict['throttle'], steer=action_dict['steer']))
+            self.controlled_vehicle.apply_control(carla.VehicleControl(throttle=action_dict['throttle'], steer=action_dict['steer'], brake=action_dict['brake']))
 
+        # TODO: Implement automatic lateral control
         elif self.longitudinal:
             action_dict = self.get_action(action)
+            self.controlled_vehicle.apply_control(carla.VehicleControl(throttle=action_dict['throttle'], brake=action_dict['brake']))
 
-            distance = self.calculate_distance(self.controlled_vehicle.get_location(), self.waypoints[self.waypoint_idx].transform.location)
-            steer = self.controller.run_step(self.waypoints[self.waypoint_idx])
-            control = carla.VehicleControl(throttle=action_dict['throttle'], steer=steer)
-            self.controlled_vehicle.apply_control(control)
-    
-            if self.waypoint_idx == (len(self.waypoints) - 1):
-                self.controlled_vehicle.apply_control(carla.VehicleControl(brake=1.0, steer=0.0))
-                self.is_arrived = True
-
-            if distance < 3.5:
-                self.waypoint_idx += 1
-        
+        # TODO: Implement automatic longitudinal control
         elif self.lateral:
             action_dict = self.get_action(action)
-            throttle = self.controller.run_step(self.target_speed)
-            control = carla.VehicleControl(throttle=throttle, steer=action_dict['steer'])
-            self.controlled_vehicle.apply_control(control)
+            self.controlled_vehicle.apply_control(carla.VehicleControl(steer=action_dict['steer']))
 
 class DiscreteMetaAction(ActionType):
     """
